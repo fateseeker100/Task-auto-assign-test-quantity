@@ -3,223 +3,124 @@ import pandas as pd
 import numpy as np
 import altair as alt
 from collections import defaultdict
-import time
-import io
-import base64
 import math
 import os
 
 # -----------------------------
-# Page Configuration
+# Page Config
 # -----------------------------
-st.set_page_config(
-    page_title="Task Auto-Assignment System",
-    page_icon="📋",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# -----------------------------
-# Custom CSS for Layout & Styling
-# -----------------------------
-st.markdown("""
-<style>
-    .main .block-container {
-        padding-left: 2rem;
-        padding-right: 2rem;
-        max-width: none;
-    }
-    .sidebar .sidebar-content {
-        width: 21rem;
-    }
-    .main {
-        margin-left: 0;
-    }
-    .stApp > div:first-child {
-        margin-left: 0;
-    }
-    .stDataFrame, .stTable {
-        width: 100% !important;
-        overflow-x: auto !important;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        width: 100% !important;
-    }
-    .element-container {
-        width: 100% !important;
-    }
-    div[data-testid="stDataFrame"] {
-        width: 100% !important;
-        overflow-x: auto !important;
-    }
-    @media (max-width: 768px) {
-        .main .block-container {
-            padding-left: 1rem;
-            padding-right: 1rem;
-        }
-    }
-    .stDataFrame > div {
-        width: 100% !important;
-        max_width: none !important;
-    }
-    .crud-section {
-        border: 1px solid #ddd;
-        border-radius: 8px;
-        padding: 20px;
-        margin: 10px 0;
-        background-color: #f8f9fa;
-    }
-    .success-box {
-        padding: 10px;
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        border-radius: 5px;
-        color: #155724;
-        margin: 10px 0;
-    }
-    .error-box {
-        padding: 10px;
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        border-radius: 5px;
-        color: #721c24;
-        margin: 10px 0;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="Task Auto-Assignment System", page_icon="📋", layout="wide")
 
 # -----------------------------
 # Data Models
 # -----------------------------
 class TaskSimulationData:
-    def __init__(self, product_row):
-        self.product = product_row["Product"]
-        self.description = product_row["Task"]
-        self.task_id = product_row["Result"]
-        # Handle NaN requirements
-        requirements_str = str(product_row["Requirements"])
-        if pd.isna(product_row["Requirements"]) or requirements_str.lower() == "nan":
+    def __init__(self, row):
+        self.product = row["Product"]
+        self.description = row["Task"]
+        self.task_id = row["Result"]
+        # Parse requirements
+        requirements_str = str(row["Requirements"])
+        if pd.isna(row["Requirements"]) or requirements_str.lower() == "nan":
             self.requirements = []
         else:
-            self.requirements = [req.strip() for req in requirements_str.split(",") if req.strip()]
-        
+            self.requirements = [r.strip() for r in requirements_str.split(",") if r.strip()]
+        # Skills
         self.skill_requirements = {
-            "Bending": product_row["Bending"] / 100,
-            "Gluing": product_row["Gluing"] / 100,
-            "Assembling": product_row["Assembling"] / 100,
-            "EdgeScrap": product_row["EdgeScrap"] / 100,
-            "OpenPaper": product_row["OpenPaper"] / 100,
-            "QualityControl": product_row["QualityControl"] / 100,
+            "Bending": row["Bending"] / 100,
+            "Gluing": row["Gluing"] / 100,
+            "Assembling": row["Assembling"] / 100,
+            "EdgeScrap": row["EdgeScrap"] / 100,
+            "OpenPaper": row["OpenPaper"] / 100,
+            "QualityControl": row["QualityControl"] / 100,
         }
-        self.time_per_piece_seconds = int(product_row.get("TimePerPieceSeconds", 60))  # Default 60s if missing
+        self.time_per_piece_seconds = int(row.get("TimePerPieceSeconds", 60))
 
 class WorkerSimulationData:
-    def __init__(self, worker_row):
-        self.name = worker_row["Worker"]
+    def __init__(self, row):
+        self.name = row["Worker"]
         self.skills = {
-            "Bending": worker_row["Bending"],
-            "Gluing": worker_row["Gluing"],
-            "Assembling": worker_row["Assembling"],
-            "EdgeScrap": worker_row["EdgeScrap"],
-            "OpenPaper": worker_row["OpenPaper"],
-            "QualityControl": worker_row["QualityControl"],
+            "Bending": row["Bending"],
+            "Gluing": row["Gluing"],
+            "Assembling": row["Assembling"],
+            "EdgeScrap": row["EdgeScrap"],
+            "OpenPaper": row["OpenPaper"],
+            "QualityControl": row["QualityControl"],
         }
-        self.favorite_products = [
-            str(worker_row["FavoriteProduct1"]) if pd.notna(worker_row["FavoriteProduct1"]) else "",
-            str(worker_row["FavoriteProduct2"]) if pd.notna(worker_row["FavoriteProduct2"]) else "",
-            str(worker_row["FavoriteProduct3"]) if pd.notna(worker_row["FavoriteProduct3"]) else ""
-        ]
 
 # -----------------------------
-# Data Loading & Saving
+# Load & Save Data
 # -----------------------------
 @st.cache_data
 def load_data():
-    try:
-        if os.path.exists("workers.csv"):
-            workers_df = pd.read_csv("workers.csv")
-        else:
-            workers_df = pd.DataFrame(columns=[
-                "Worker","Bending","Gluing","Assembling","EdgeScrap","OpenPaper","QualityControl",
-                "FavoriteProduct1","FavoriteProduct2","FavoriteProduct3"
-            ])
-            workers_df.to_csv("workers.csv", index=False)
-        
-        if os.path.exists("products.csv"):
-            products_df = pd.read_csv("products.csv")
-        else:
-            products_df = pd.DataFrame(columns=[
-                "Product","Task","Result","Requirements","Bending","Gluing","Assembling",
-                "EdgeScrap","OpenPaper","QualityControl","TimePerPieceSeconds"
-            ])
-            products_df.to_csv("products.csv", index=False)
+    if os.path.exists("workers.csv"):
+        workers_df = pd.read_csv("workers.csv")
+    else:
+        workers_df = pd.DataFrame(columns=[
+            "Worker","Bending","Gluing","Assembling","EdgeScrap","OpenPaper","QualityControl",
+            "FavoriteProduct1","FavoriteProduct2","FavoriteProduct3"
+        ])
+        workers_df.to_csv("workers.csv", index=False)
 
-        return workers_df, products_df
-    except Exception as e:
-        st.error(f"Error loading data: {e}")
-        st.stop()
+    if os.path.exists("products.csv"):
+        products_df = pd.read_csv("products.csv")
+    else:
+        products_df = pd.DataFrame(columns=[
+            "Product","Task","Result","Requirements","Bending","Gluing","Assembling",
+            "EdgeScrap","OpenPaper","QualityControl","TimePerPieceSeconds"
+        ])
+        products_df.to_csv("products.csv", index=False)
+
+    return workers_df, products_df
 
 def save_workers_data(df):
-    try:
-        df.to_csv("workers.csv", index=False)
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"Error saving workers: {e}")
-        return False
+    df.to_csv("workers.csv", index=False)
+    st.cache_data.clear()
 
 def save_products_data(df):
-    try:
-        df.to_csv("products.csv", index=False)
-        st.cache_data.clear()
-        return True
-    except Exception as e:
-        st.error(f"Error saving products: {e}")
-        return False
+    df.to_csv("products.csv", index=False)
+    st.cache_data.clear()
 
 # -----------------------------
 # Helper Functions
 # -----------------------------
 def calculate_skill_match(worker_skills, task_skill_requirements):
-    total_score = 0
-    count = 0
-    for skill, required_ratio in task_skill_requirements.items():
-        if required_ratio > 0:
-            score = worker_skills.get(skill, 0) / max(0.01, required_ratio)
-            total_score += score
+    total_score, count = 0, 0
+    for skill, req_ratio in task_skill_requirements.items():
+        if req_ratio > 0:
+            total_score += worker_skills.get(skill, 0) / max(0.01, req_ratio)
             count += 1
     return total_score / count if count > 0 else 0.1
 
 def format_time(minutes):
-    hours_from_start = minutes // 60
-    mins_past_hour = minutes % 60
-    display_hour = 8 + hours_from_start
-    return f"{int(display_hour):02d}:{int(mins_past_hour):02d}"
+    hour = 8 + (minutes // 60)
+    minute = minutes % 60
+    return f"{hour:02d}:{minute:02d}"
 
-def check_requirements_met_for_qty(task, inventory):
+def check_requirements_met(task, inventory, required_qty):
     if not task["requirements"]:
         return True
     for req in task["requirements"]:
-        if inventory[req] <= 0:
+        # Strict rule: prerequisite must be fully complete for the entire product qty
+        if inventory[req] < required_qty:
             return False
     return True
 
 # -----------------------------
-# Core Simulation (Quantity-Based)
+# Simulation Logic
 # -----------------------------
 def assign_tasks(products_to_produce, available_workers_df, products_df, slot_duration_minutes=30):
     try:
         slot_duration_seconds = slot_duration_minutes * 60
         workday_minutes = 8 * 60
-        workday_slots = workday_minutes // slot_duration_minutes
-
         task_sim_data_map = {row["Result"]: TaskSimulationData(row) for _, row in products_df.iterrows()}
         worker_sim_data_map = {row["Worker"]: WorkerSimulationData(row) for _, row in available_workers_df.iterrows()}
 
+        # Expand tasks
         all_task_instances = []
-        for product_name, qty in products_to_produce.items():
-            product_tasks = products_df[products_df["Product"] == product_name].sort_values(by="Result")
-            for _, row in product_tasks.iterrows():
+        for product, qty in products_to_produce.items():
+            tasks = products_df[products_df["Product"] == product].sort_values(by="Result")
+            for _, row in tasks.iterrows():
                 sim = task_sim_data_map[row["Result"]]
                 all_task_instances.append({
                     "task_id": sim.task_id,
@@ -247,15 +148,20 @@ def assign_tasks(products_to_produce, available_workers_df, products_df, slot_du
 
             current_day = (current_time_minutes // workday_minutes) + 1
             current_slot = (current_time_minutes % workday_minutes) // slot_duration_minutes
-            available_workers = list(worker_sim_data_map.values())
 
-            available_tasks = [t for t in all_task_instances if t["remaining_qty"] > 0 and check_requirements_met_for_qty(t, inventory)]
+            available_tasks = []
+            for t in all_task_instances:
+                if t["remaining_qty"] > 0:
+                    product_qty = products_to_produce[t["product"]]
+                    if check_requirements_met(t, inventory, product_qty):
+                        available_tasks.append(t)
+
             if not available_tasks:
                 current_time_minutes += slot_duration_minutes
                 continue
 
             worker_assignments = {}
-            for worker in available_workers:
+            for worker in worker_sim_data_map.values():
                 if not available_tasks:
                     break
                 best_task = max(
@@ -304,19 +210,17 @@ def assign_tasks(products_to_produce, available_workers_df, products_df, slot_du
             "inventory": dict(inventory),
             "simulation_log": simulation_log,
             "estimated_days": current_day,
-            "all_task_instances": all_task_instances,
-            "worker_sim_data_map": worker_sim_data_map
         }
 
     except Exception as e:
-        st.error(f"Error in simulation: {e}")
+        st.error(f"Simulation error: {e}")
         return None
 
 # -----------------------------
 # Display Functions
 # -----------------------------
 def display_schedule_gantt(schedule_data, estimated_days):
-    st.subheader("Tasks Schedule")
+    st.subheader("Schedule")
     if estimated_days > 0:
         day_tabs = st.tabs([f"Day {d}" for d in range(1, estimated_days + 1)])
         for idx, day in enumerate(range(1, estimated_days + 1)):
@@ -330,8 +234,7 @@ def display_schedule_gantt(schedule_data, estimated_days):
                         max_slot = max(all_slots)
                         rows = []
                         for slot in range(max_slot + 1):
-                            time_str = format_time(slot * 30)
-                            row = {"TIME": time_str}
+                            row = {"TIME": format_time(slot * 30)}
                             for worker in sorted(day_schedule.keys()):
                                 row[worker] = day_schedule[worker].get(slot, "idle")
                             rows.append(row)
@@ -349,44 +252,22 @@ def display_simulation_results(result):
         st.error("Simulation failed!")
         return
     st.success(f"Simulation completed! Estimated {result['estimated_days']} day(s).")
-    tab1, tab2, tab3 = st.tabs(["📅 Schedule", "👥 Worker Stats", "📝 Simulation Log"])
+    tab1, tab2 = st.tabs(["📅 Schedule", "📝 Simulation Log"])
     with tab1:
         display_schedule_gantt(result["schedule"], result["estimated_days"])
     with tab2:
-        st.subheader("Worker Statistics")
-        st.write("Currently simplified stats")
-    with tab3:
-        log_df = pd.DataFrame(result["simulation_log"])
-        st.dataframe(log_df, use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(result["simulation_log"]), use_container_width=True, hide_index=True)
 
 # -----------------------------
-# CRUD for Workers
-# -----------------------------
-def render_workers_crud(df):
-    st.markdown('<div class="crud-section">', unsafe_allow_html=True)
-    st.subheader("👥 Manage Workers")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# -----------------------------
-# CRUD for Products
-# -----------------------------
-def render_products_crud(df):
-    st.markdown('<div class="crud-section">', unsafe_allow_html=True)
-    st.subheader("📦 Manage Products")
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# -----------------------------
-# Main Application
+# Main App
 # -----------------------------
 def main():
     workers_df, products_df = load_data()
     with st.sidebar:
-        page = st.radio("Navigate", ["Home","Product Database","Worker Database","Production Order","Manage Workers","Manage Products","About"])
+        page = st.radio("Navigate", ["Home","Product Database","Worker Database","Production Order","About"])
     if page == "Home":
-        st.header("Welcome to Worker Task Autoassign System")
-        st.write("Automatically assigns tasks based on skills and requirements.")
+        st.header("Welcome")
+        st.write("Auto-assign tasks based on skills and requirements.")
     elif page == "Product Database":
         st.header("📦 Product Database")
         st.dataframe(products_df, use_container_width=True)
@@ -396,29 +277,18 @@ def main():
     elif page == "Production Order":
         st.header("🎯 Production Order")
         products_to_produce = {}
-        col1, col2 = st.columns(2)
-        with col1:
-            for product in products_df["Product"].unique():
-                qty = st.number_input(f"{product}", min_value=0, max_value=1000, value=0, step=1)
-                if qty > 0:
-                    products_to_produce[product] = qty
-        with col2:
-            selected_workers = st.multiselect("Choose Worker(s)", workers_df["Worker"].tolist(), default=workers_df["Worker"].tolist())
-        if products_to_produce:
-            st.subheader("Order Summary")
-            st.write(products_to_produce)
-            if st.button("🚀 Run Simulation"):
-                available_workers_df = workers_df[workers_df["Worker"].isin(selected_workers)]
-                result = assign_tasks(products_to_produce, available_workers_df, products_df)
-                if result:
-                    display_simulation_results(result)
-    elif page == "Manage Workers":
-        render_workers_crud(workers_df)
-    elif page == "Manage Products":
-        render_products_crud(products_df)
+        for product in products_df["Product"].unique():
+            qty = st.number_input(f"{product}", min_value=0, max_value=1000, value=0, step=1)
+            if qty > 0:
+                products_to_produce[product] = qty
+        selected_workers = st.multiselect("Choose Workers", workers_df["Worker"].tolist(), default=workers_df["Worker"].tolist())
+        if products_to_produce and st.button("🚀 Run Simulation"):
+            available_workers_df = workers_df[workers_df["Worker"].isin(selected_workers)]
+            result = assign_tasks(products_to_produce, available_workers_df, products_df)
+            if result:
+                display_simulation_results(result)
     elif page == "About":
-        st.header("About")
-        st.write("This app assigns tasks based on skills, requirements, and production constraints.")
+        st.write("This app assigns tasks respecting prerequisites and production constraints.")
 
 if __name__ == "__main__":
     main()
